@@ -1,7 +1,7 @@
 import uuid
 from django.db import models
-class TimeStamped model(models.Model):
-    created_at = models.DateTimeField(auto_now=True, db_index-True)
+class TimeStamped (models.Model):
+    created_at = models.DateTimeField(auto_now=True, db_index=True)
     updated_at = models.DateTimeField(auto_now=True)
     class Meta:
         abstract = True

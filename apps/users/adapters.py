@@ -1,6 +1,7 @@
 import logging
 
-from allauth.exceptions import ImmediateHttpResponse
+from allauth.account.adapter import DefaultAccountAdapter
+from allauth.core.exceptions import ImmediateHttpResponse
 from allauth.socialaccount.adapter import DefaultSocialAccountAdapter
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -13,7 +14,6 @@ User = get_user_model()
 class GoogleSocialAccountAdapter(DefaultSocialAccountAdapter):
     def pre_social_login(self, request, sociallogin):
         if sociallogin.is_existing:
-            # Already linked to a local user (returning Google user) — nothing to check.
             return
 
         email = sociallogin.account.extra_data.get("email")
@@ -24,7 +24,7 @@ class GoogleSocialAccountAdapter(DefaultSocialAccountAdapter):
         try:
             existing_user = User.objects.get(email__iexact=email)
         except User.DoesNotExist:
-            return  # brand-new user — allauth creates the account normally
+            return
 
         if not email_verified:
             logger.warning(
@@ -38,5 +38,9 @@ class GoogleSocialAccountAdapter(DefaultSocialAccountAdapter):
                 )
             )
 
-        
         sociallogin.connect(request, existing_user)
+
+
+class NoSignupAccountAdapter(DefaultAccountAdapter):
+    def is_open_for_signup(self, request):
+        return False

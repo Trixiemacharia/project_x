@@ -53,6 +53,7 @@ INSTALLED_APPS = [
 ]
 
 SITE_ID = 1
+
 AUTH_USER_MODEL = "users.User"
 
 REST_FRAMEWORK = {
@@ -119,11 +120,21 @@ DATABASES = {
     }
 }
 
+AUTHENTICATION_BACKENDS = [
+    "django.contrib.auth.backends.ModelBackend",
+    "allauth.account.auth_backends.AuthenticationBackend",
+]
 
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
 
 AUTH_PASSWORD_VALIDATORS = [
+    {
+        'NAME': 'apps.core.validators.PasswordComplexityValidator',
+    },
+    {
+        'NAME': 'apps.core.validators.PasswordNotSimilarToEmailValidator',
+    },
     {
         'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
     },
@@ -163,11 +174,16 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 LOGIN_REDIRECT_URL = "/api/v1/auth/google/finish/"
 SOCIALACCOUNT_ADAPTER = "apps.users.adapters.GoogleSocialAccountAdapter"
+ACCOUNT_ADAPTER = "apps.users.adapters.NoSignupAccountAdapter"
 SOCIALACCOUNT_LOGIN_ON_GET = True
 FRONTEND_URL = config("FRONTEND_URL")
 
 SOCIALACCOUNT_PROVIDERS = {
     'google': {
+        'APP':{
+            "client_id": config("GOOGLE_OAUTH_CLIENT_ID"),
+            "secret": config("GOOGLE_OAUTH_CLIENT_SECRET"),
+        },
         'SCOPE': [
             'profile',
             'email',
@@ -178,3 +194,13 @@ SOCIALACCOUNT_PROVIDERS = {
         'OAUTH_PKCE_ENABLED': True,
     }
 }
+
+FAILED_LOGIN_MAX_ATTEMPTS = config("FAILED_LOGIN_MAX_ATTEMPTS", cast=int)
+FAILED_LOGIN_LOCKOUT_SECONDS = config("FAILED_LOGIN_LOCKOUT_SECONDS", cast=int)
+
+OTP_LENGTH = config("OTP_LENGTH", cast=int)
+OTP_TTL_SECONDS = config("OTP_TTL_SECONDS", cast=int)
+OTP_MAX_ATTEMPTS = config("OTP_MAX_ATTEMPTS", cast=int)
+
+EMAIL_BACKEND = config("EMAIL_BACKEND")
+DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL")
