@@ -44,6 +44,7 @@ INSTALLED_APPS = [
     'rest_framework',
     #apps
     'apps.users',
+    'apps.core',
     #thrid party providers
     'allauth',
     'allauth.account',

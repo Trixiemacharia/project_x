@@ -13,7 +13,10 @@ from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from apps.users.serializers import LoginSerializer, RegisterSerializer
+from apps.users import lockout
+from apps.users.otp import InvalidMfaSession, start_mfa_challenge, verify_otp
+from apps.users.serializers import LoginSerializer, MfaVerifySerializer, RegisterSerializer
+from apps.users.services import authenticate_identifier
 from apps.users.throttles import AuthRateThrottle
 
 logger = logging.getLogger(__name__)
@@ -45,8 +48,16 @@ def _issue_tokens(response: Response, user) -> Response:
     return response
 
 
+def _mfa_required_response(mfa_token: str) -> Response:
+    return Response({"mfa_required": True, "mfa_token": mfa_token}, status=status.HTTP_200_OK)
+
+
 class RegisterView(APIView):
-    """POST /api/v1/auth/register/ — {"username", "email", "password"}"""
+    """
+    POST /api/v1/auth/register/ — {"username", "email", "password"}
+    -> 201 {"user": {...}, "access": "..."}  (+ refresh_token HttpOnly cookie)
+    -> 400 field errors: duplicate username/email, or password fails validation
+    """
 
     permission_classes = [AllowAny]
     throttle_classes = [AuthRateThrottle]
@@ -62,7 +73,13 @@ class RegisterView(APIView):
 
 
 class LoginView(APIView):
-    """POST /api/v1/auth/login/ — {"identifier", "password"}"""
+    """
+    POST /api/v1/auth/login/ — {"identifier", "password"}
+    -> 200 {"user": {...}, "access": "..."}  (+ refresh cookie) — MFA off
+    -> 200 {"mfa_required": true, "mfa_token": "..."}           — MFA on
+    -> 401 {"detail": "Invalid username/email or password."}
+    -> 429 {"detail": "Too many failed login attempts..."}
+    """
 
     permission_classes = [AllowAny]
     throttle_classes = [AuthRateThrottle]
@@ -71,12 +88,67 @@ class LoginView(APIView):
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = serializer.validated_data["user"]
+        identifier = serializer.validated_data["identifier"]
+        password = serializer.validated_data["password"]
+
+        try:
+            lockout.check_not_locked(identifier)
+        except lockout.AccountLocked as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
+        user = authenticate_identifier(identifier, password)
+        if user is None:
+            attempts = lockout.record_failure(identifier)
+            logger.warning("Failed login for identifier=%s (attempt %s)", identifier, attempts)
+            return Response(
+                {"detail": "Invalid username/email or password."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        lockout.reset(identifier)
+
+        if user.mfa_enabled:
+            mfa_token = start_mfa_challenge(user)
+            return _mfa_required_response(mfa_token)
+
+        response = Response({"user": _user_payload(user)}, status=status.HTTP_200_OK)
+        return _issue_tokens(response, user)
+
+
+class MfaVerifyView(APIView):
+    """
+    POST /api/v1/auth/mfa/verify/ — {"mfa_token", "otp_code"}
+    -> 200 {"user": {...}, "access": "..."} + refresh cookie
+    -> 401 expired/invalid session, wrong code, or attempts exhausted
+    """
+
+    permission_classes = [AllowAny]
+    throttle_classes = [AuthRateThrottle]
+    throttle_scope = "auth"
+
+    def post(self, request):
+        serializer = MfaVerifySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            user = verify_otp(
+                serializer.validated_data["mfa_token"],
+                serializer.validated_data["otp_code"],
+            )
+        except InvalidMfaSession as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_401_UNAUTHORIZED)
+
         response = Response({"user": _user_payload(user)}, status=status.HTTP_200_OK)
         return _issue_tokens(response, user)
 
 
 def google_login_finish(request):
+    """
+    Plain Django view — allauth redirects here after finishing the Google
+    OAuth2 exchange and logging the user into a Django *session*. Wired up
+    via LOGIN_REDIRECT_URL. Mints a one-time handoff code, drops the
+    session immediately (this backend is JWT-only), and redirects to the
+    frontend with only the code in the URL — never the actual tokens.
+    """
     if not request.user.is_authenticated:
         return HttpResponseRedirect(f"{settings.FRONTEND_URL}/auth/error?reason=google_login_failed")
 
@@ -91,12 +163,8 @@ def google_login_finish(request):
 
 class GoogleExchangeView(APIView):
     """
-    POST /api/v1/auth/google/exchange/ — {"code": "<from the /auth/callback redirect>"}
-
-    Exchanges the short-lived handoff code for a real access/refresh pair,
-    exactly like /auth/login/ or /auth/register/ do. The code is deleted
-    from cache on first use — a replayed code always fails, even within
-    its TTL.
+    POST /api/v1/auth/google/exchange/ — {"code": "<from /auth/callback>"}
+    Exchanges the short-lived handoff code for a real access/refresh pair.
     """
 
     permission_classes = [AllowAny]
@@ -114,7 +182,7 @@ class GoogleExchangeView(APIView):
             return Response({"detail": "Invalid or expired code."}, status=status.HTTP_401_UNAUTHORIZED)
         cache.delete(cache_key)
 
-        from apps.users.models import User  # local import avoids app-loading order issues
+        from apps.users.models import User
 
         try:
             user = User.objects.get(id=user_id)
