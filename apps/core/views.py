@@ -7,7 +7,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-logger = logging.getLogger(name)
+logger = logging.getLogger(__name__)
 class HealthCheckView(APIView):
     """GET /api/v1/health/
 Unauthenticated liveness/readiness probe for load balancers and
@@ -41,6 +41,7 @@ Response:
         except OperationalError:
             logger.exception("Health check: database unreachable")
             return "unreachable"
+        return "ok"
 
     def _check_redis(self) -> str:
         try:
@@ -49,3 +50,4 @@ Response:
         except redis.exceptions.RedisError:
             logger.exception("Health check: redis unreachable")
             return "unreachable"
+        return "ok"

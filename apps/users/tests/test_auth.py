@@ -109,7 +109,7 @@ GOOGLE_PAYLOAD_NEW = {
 class TestGoogleAuth:
     url = reverse("auth-google")
 
-@patch("apps.users.views.verify_google_id_token")
+    @patch("apps.users.views.verify_google_id_token")
     def test_new_google_user_is_created(self, mock_verify, client):
         mock_verify.return_value = GOOGLE_PAYLOAD_NEW
         response = client.post(self.url, {"id_token": "fake-token"}, format="json")
@@ -119,7 +119,7 @@ class TestGoogleAuth:
         assert user.google_sub == "google-sub-123"
         assert not user.has_usable_password()
 
-@patch("apps.users.views.verify_google_id_token")
+    @patch("apps.users.views.verify_google_id_token")
     def test_existing_linked_google_user_logs_in(self, mock_verify, client):
         existing = User.objects.create(
             username="alreadylinked", email="linked@example.com", google_sub="existing-sub"
@@ -134,7 +134,7 @@ class TestGoogleAuth:
         assert response.data["user"]["id"] == existing.id
         assert User.objects.filter(email="linked@example.com").count() == 1
 
-@patch("apps.users.views.verify_google_id_token")
+    @patch("apps.users.views.verify_google_id_token")
     def test_unverified_email_conflict_is_rejected(self, mock_verify, client):
         User.objects.create_user(username="haspassword", email="conflict@example.com", password=VALID_PASSWORD)
         mock_verify.return_value = {
@@ -150,16 +150,18 @@ class TestGoogleAuth:
         # No account was modified or created off the back of the unverified claim.
         assert not User.objects.filter(email="conflict@example.com", google_sub="some-other-sub").exists()
 
-@patch("apps.users.views.verify_google_id_token")
+    @patch("apps.users.views.verify_google_id_token")
     def test_invalid_token_returns_401(self, mock_verify, client):
         mock_verify.side_effect = InvalidGoogleToken("Invalid or expired Google token.")
         response = client.post(self.url, {"id_token": "garbage"}, format="json")
         assert response.status_code == 401
+
 @pytest.mark.django_db
 class TestRefreshAndLogout:
     def setup_method(self):
         self.user = User.objects.create_user(
             username="refreshuser", email="refresh@example.com", password=VALID_PASSWORD)
+
     def _login(self, client):
         return client.post(
             reverse("auth-login"),
@@ -199,7 +201,7 @@ class TestRefreshAndLogout:
         logout_response = client.post(reverse("auth-logout"))
         assert logout_response.status_code == 200
 
-    # The refresh token that was just blacklisted must no longer work.
+        # The refresh token that was just blacklisted must no longer work.
         client.credentials()
         client.cookies["refresh_token"] = refresh
         refresh_attempt = client.post(reverse("auth-token-refresh"))

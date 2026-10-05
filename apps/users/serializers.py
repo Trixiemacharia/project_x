@@ -1,4 +1,5 @@
 from django.contrib.auth import get_user_model, password_validation
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
 User = get_user_model()
@@ -23,7 +24,12 @@ class RegisterSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         candidate_user = User(username=attrs.get("username", ""), email=attrs.get("email", ""))
-        password_validation.validate_password(attrs["password"], user=candidate_user)
+        try:
+            password_validation.validate_password(attrs["password"], user=candidate_user)
+        except DjangoValidationError as exc:
+            # A password policy failure belongs to the password field, rather
+            # than being presented as a serializer-wide validation error.
+            raise serializers.ValidationError({"password": exc.messages}) from exc
         return attrs
 
     def create(self, validated_data):

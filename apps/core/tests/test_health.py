@@ -16,7 +16,7 @@ class TestHealthCheck:
 
     def test_health_ok_when_dependencies_up(self):
         with patch("apps.core.views.redis.Redis.ping", return_value=True):
-        response = self.client.get(self.url)
+            response = self.client.get(self.url)
 
         assert response.status_code == 200
         assert response.data["status"] == "ok"
@@ -28,7 +28,7 @@ class TestHealthCheck:
             "apps.core.views.redis.Redis.ping",
             side_effect=redis.exceptions.ConnectionError,
         ):
-        response = self.client.get(self.url)
+            response = self.client.get(self.url)
 
         assert response.status_code == 503
         assert response.data["status"] == "unavailable"
@@ -37,6 +37,6 @@ class TestHealthCheck:
     def test_health_check_requires_no_authentication(self):
     # No credentials set on the client at all.
         with patch("apps.core.views.redis.Redis.ping", return_value=True):
-        response = self.client.get(self.url)
+            response = self.client.get(self.url)
         assert response.status_code != 401
         assert response.status_code != 403

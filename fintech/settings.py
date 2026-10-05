@@ -42,9 +42,11 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'django.contrib.sites',
     'rest_framework',
+    'rest_framework_simplejwt.token_blacklist',
     #apps
     'apps.users',
     'apps.core',
+    'apps.wallets',
     #thrid party providers
     'allauth',
     'allauth.account',
@@ -63,7 +65,20 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
     ),
+    'DEFAULT_THROTTLE_RATES': {
+        'auth': '10/minute',
+        'transfer': '10/min',
+        'beneficiary': '20/min',
+    },
 }
+
+# JWT refresh tokens are deliberately cookie-only.  Defaults make local
+# development and the test suite usable without adding unrelated env vars.
+REFRESH_COOKIE_NAME = 'refresh_token'
+REFRESH_COOKIE_PATH = '/api/v1/auth/'
+REFRESH_COOKIE_SECURE = config('REFRESH_COOKIE_SECURE', default=False, cast=bool)
+REFRESH_COOKIE_SAMESITE = 'Lax'
+REDIS_URL = config('REDIS_URL', default='redis://127.0.0.1:6379/0')
 
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=30),

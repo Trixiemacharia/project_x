@@ -16,7 +16,13 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from apps.users import lockout
 from apps.users.otp import InvalidMfaSession, start_mfa_challenge, verify_otp
 from apps.users.serializers import LoginSerializer, MfaVerifySerializer, RegisterSerializer
-from apps.users.services import authenticate_identifier
+from apps.users.services import (
+    InvalidGoogleToken,
+    UnverifiedGoogleEmailConflict,
+    authenticate_identifier,
+    get_or_create_google_user,
+    verify_google_id_token,
+)
 from apps.users.throttles import AuthRateThrottle
 
 logger = logging.getLogger(__name__)
@@ -102,7 +108,7 @@ class LoginView(APIView):
             logger.warning("Failed login for identifier=%s (attempt %s)", identifier, attempts)
             return Response(
                 {"detail": "Invalid username/email or password."},
-                status=status.HTTP_401_UNAUTHORIZED,
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         lockout.reset(identifier)
@@ -138,6 +144,30 @@ class MfaVerifyView(APIView):
             return Response({"detail": str(exc)}, status=status.HTTP_401_UNAUTHORIZED)
 
         response = Response({"user": _user_payload(user)}, status=status.HTTP_200_OK)
+        return _issue_tokens(response, user)
+
+
+class GoogleAuthView(APIView):
+    """POST /api/v1/auth/google/ — exchange a verified Google ID token for JWTs."""
+
+    permission_classes = [AllowAny]
+    throttle_classes = [AuthRateThrottle]
+    throttle_scope = "auth"
+
+    def post(self, request):
+        token = request.data.get("id_token")
+        try:
+            payload = verify_google_id_token(token)
+            user, created = get_or_create_google_user(payload)
+        except InvalidGoogleToken as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_401_UNAUTHORIZED)
+        except UnverifiedGoogleEmailConflict as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+
+        response = Response(
+            {"user": _user_payload(user)},
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
         return _issue_tokens(response, user)
 
 

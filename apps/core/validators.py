@@ -4,15 +4,12 @@ from django.core.exceptions import ValidationError
 
 
 class PasswordComplexityValidator:
-    UPPER_RE = re.compile(r"[A-Z]")
     LOWER_RE = re.compile(r"[a-z]")
     DIGIT_RE = re.compile(r"[0-9]")
     SYMBOL_RE = re.compile(r"[^A-Za-z0-9]")
 
     def validate(self, password, user=None):
         missing = []
-        if not self.UPPER_RE.search(password):
-            missing.append("an uppercase letter")
         if not self.LOWER_RE.search(password):
             missing.append("a lowercase letter")
         if not self.DIGIT_RE.search(password):
