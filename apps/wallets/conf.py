@@ -1,9 +1,4 @@
-"""Tunable wallet / fraud settings.
-
-Override any key from Django settings:
-
-    WALLET_SETTINGS = {"SINGLE_TRANSFER_LIMIT": Decimal("100000"), "WEIGHTS": {"VELOCITY": 50}}
-"""
+"""Tunable wallet"""
 from decimal import Decimal
 
 from django.conf import settings
@@ -20,22 +15,26 @@ DEFAULTS = {
     # Risk score outcomes: < REVIEW allow, REVIEW..BLOCK-1 hold for review, >= BLOCK reject.
     "REVIEW_THRESHOLD": 40,
     "BLOCK_THRESHOLD": 80,
+    #how fast transactions are happening
     "VELOCITY_WINDOW_MINUTES": 10,
     "VELOCITY_MAX_TRANSFERS": 5,
+    #check a user's transaction history
     "ANOMALY_LOOKBACK_DAYS": 30,
     "ANOMALY_MIN_HISTORY": 3,
     "ANOMALY_MULTIPLIER": Decimal("5"),
     "NEW_BENEFICIARY_HOURS": 24,
     "NEW_WALLET_HOURS": 24,
-    "DRAIN_RATIO": Decimal("0.9"),
+    "DRAIN_RATIO": Decimal("0.9"),#wallet drain detection
     "STRUCTURING_BAND": Decimal("0.8"),  # share of SINGLE_TRANSFER_LIMIT
     "STRUCTURING_MIN_PRIOR": 2,
     "ODD_HOURS": (0, 5),  # local time, start inclusive / end exclusive
     "REJECTION_WINDOW_MINUTES": 60,
-    "REJECTION_MAX": 2,
+    "REJECTION_MAX": 2, 
+    #check money coming into one wallet from many diff senders
     "FAN_IN_SENDERS": 5,
     "FAN_IN_WINDOW_HOURS": 24,
     "FAN_IN_MAX_WALLET_AGE_DAYS": 30,
+    #checks for fraud
     "WEIGHTS": {
         "SINGLE_LIMIT": 100,
         "DAILY_LIMIT": 100,
