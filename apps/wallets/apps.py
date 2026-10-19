@@ -7,4 +7,4 @@ class WalletsConfig(AppConfig):
     label = "wallets"
 
     def ready(self):
-        from . import signals
+        from . import signals 

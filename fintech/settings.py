@@ -12,8 +12,9 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 
 from pathlib import Path
 import os
-from decouple import config
+from decouple import config, Csv
 from datetime import timedelta
+from decimal import Decimal
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -47,6 +48,7 @@ INSTALLED_APPS = [
     'apps.users',
     'apps.core',
     'apps.wallets',
+    'apps.payments',
     #thrid party providers
     'allauth',
     'allauth.account',
@@ -219,3 +221,23 @@ OTP_MAX_ATTEMPTS = config("OTP_MAX_ATTEMPTS", cast=int)
 
 EMAIL_BACKEND = config("EMAIL_BACKEND")
 DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL")
+
+MPESA_ENV = config("MPESA_ENV", default="sandbox")  # sandbox | production
+MPESA_CONSUMER_KEY = config("MPESA_CONSUMER_KEY", default="")
+MPESA_CONSUMER_SECRET = config("MPESA_CONSUMER_SECRET", default="")
+MPESA_SHORTCODE = config("MPESA_SHORTCODE", default="")
+MPESA_PASSKEY = config("MPESA_PASSKEY", default="")
+MPESA_CALLBACK_BASE_URL = config("MPESA_CALLBACK_BASE_URL", default="")  # public HTTPS, e.g. ngrok in dev
+MPESA_CALLBACK_SECRET = config("MPESA_CALLBACK_SECRET", default="")
+MPESA_CALLBACK_ALLOWED_IPS = config("MPESA_CALLBACK_ALLOWED_IPS", default="", cast=Csv())
+MPESA_MIN_AMOUNT = config("MPESA_MIN_AMOUNT", default="", cast=int)
+MPESA_MAX_AMOUNT = config("MPESA_MAX_AMOUNT", default="", cast=int)
+MPESA_QUERY_AFTER_SECONDS = config("MPESA_QUERY_AFTER_SECONDS", default="")
+MPESA_EXPIRY_SECONDS = config("MPESA_EXPIRY_SECONDS", default="")
+
+CELERY_BEAT_SCHEDULE = {
+    "mpesa-reconcile-pending": {
+        "task": "apps.payments.tasks.reconcile_pending_payments",
+        "schedule": 30.0,
+    },
+}
