@@ -20,4 +20,4 @@ class BeneficiaryThrottle(_DefaultedRate):
     """Also slows account-number enumeration through the add-beneficiary lookup."""
 
     scope = "beneficiary"
-    default_rate = "20/min"s
+    default_rate = "20/min"
