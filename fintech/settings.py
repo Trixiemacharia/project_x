@@ -49,11 +49,14 @@ INSTALLED_APPS = [
     'apps.core',
     'apps.wallets',
     'apps.payments',
+    'apps.fraud',
     #thrid party providers
     'allauth',
     'allauth.account',
     'allauth.socialaccount',
     'allauth.socialaccount.providers.google',
+    'daphne',
+    'channels',
 ]
 
 SITE_ID = 1
@@ -81,6 +84,9 @@ REFRESH_COOKIE_PATH = '/api/v1/auth/'
 REFRESH_COOKIE_SECURE = config('REFRESH_COOKIE_SECURE', default=False, cast=bool)
 REFRESH_COOKIE_SAMESITE = 'Lax'
 REDIS_URL = config('REDIS_URL', default='redis://127.0.0.1:6379/0')
+ASGI_APPLICATION = "fintech.asgi.application"
+CACHES = {"default": {"BACKEND": "django.core.cache.backends.redis.RedisCache", "LOCATION": REDIS_URL}}
+CHANNEL_LAYERS = {"default": {"BACKEND": "channels_redis.core.RedisChannelLayer", "CONFIG": {"hosts": [REDIS_URL]}}}
 
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=30),
