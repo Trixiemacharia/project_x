@@ -12,7 +12,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 
 from pathlib import Path
 import os
-from decouple import config, Csv
+from decouple import config
 from datetime import timedelta
 from decimal import Decimal
 
@@ -229,11 +229,15 @@ MPESA_SHORTCODE = config("MPESA_SHORTCODE", default="")
 MPESA_PASSKEY = config("MPESA_PASSKEY", default="")
 MPESA_CALLBACK_BASE_URL = config("MPESA_CALLBACK_BASE_URL", default="")  # public HTTPS, e.g. ngrok in dev
 MPESA_CALLBACK_SECRET = config("MPESA_CALLBACK_SECRET", default="")
-MPESA_CALLBACK_ALLOWED_IPS = config("MPESA_CALLBACK_ALLOWED_IPS", default="", cast=Csv())
-MPESA_MIN_AMOUNT = config("MPESA_MIN_AMOUNT", default="", cast=int)
-MPESA_MAX_AMOUNT = config("MPESA_MAX_AMOUNT", default="", cast=int)
-MPESA_QUERY_AFTER_SECONDS = config("MPESA_QUERY_AFTER_SECONDS", default="")
-MPESA_EXPIRY_SECONDS = config("MPESA_EXPIRY_SECONDS", default="")
+MPESA_CALLBACK_ALLOWED_IPS =  [
+    ip.strip()
+    for ip in config("MPESA_CALLBACK_ALLOWED_IPS", default="").split(",")
+    if ip.strip()
+]
+MPESA_MIN_AMOUNT = config("MPESA_MIN_AMOUNT", default="1", cast=int)
+MPESA_MAX_AMOUNT = config("MPESA_MAX_AMOUNT", default="150000", cast=int)
+MPESA_QUERY_AFTER_SECONDS = config("MPESA_QUERY_AFTER_SECONDS", default="60", cast=int)
+MPESA_EXPIRY_SECONDS = config("MPESA_EXPIRY_SECONDS", default="900", cast=int)  # 15 minutes
 
 CELERY_BEAT_SCHEDULE = {
     "mpesa-reconcile-pending": {
