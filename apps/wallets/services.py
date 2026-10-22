@@ -1,4 +1,13 @@
-"""All money movement lives here. Views and admin never touch balances directly."""
+"""All money movement lives here. Views and admin never touch balances directly.
+
+transfer() follows the sequence diagram:
+  8-9    wallet + balance pre-check           (no locks, no open DB transaction)
+  10-13  risk evaluation                      (no locks, no open DB transaction)
+  14-18  BLOCK   record rejected txn, queue fraud alert
+  19-23  REVIEW  hold funds, create REVIEW txn + case, queue analyst alert
+  24-39  ALLOW   BEGIN, lock wallets, re-validate, ledger debit/credit, record, COMMIT, then queue notifications
+Notifications are queued from transaction.on_commit (see apps.fraud.events), so nothing is announced before COMMIT.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -7,52 +16,13 @@ from decimal import Decimal
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
-from . import fraud
+from apps.fraud import recorder
+
+from . import fraud, ledger
 from .conf import wallet_conf as conf
 from .models import Transaction, Wallet
 
-
-def _record_risk_outcome(txn, decision):
-    """Persist the scorer's recommendation separately from the enforced txn state."""
-    from apps.fraud import events
-    from apps.fraud.models import AuditLog, FraudCase, OutboxEvent, RiskAssessment
-
-    category = {
-        fraud.ALLOW: RiskAssessment.Category.LOW,
-        fraud.REVIEW: RiskAssessment.Category.MEDIUM,
-        fraud.BLOCK: RiskAssessment.Category.HIGH,
-    }[decision.outcome]
-    assessment = RiskAssessment.objects.create(
-        transaction=txn,
-        score=decision.score,
-        category=category,
-        recommended_action=decision.outcome,
-        triggered_rules=[flag.code for flag in decision.flags],
-        reasons=decision.flags_as_json(),
-        engine_version=fraud.ENGINE_VERSION,
-    )
-    AuditLog.objects.create(
-        actor=None, actor_role="system", action="risk.assessed", transaction=txn,
-        metadata={"score": decision.score, "category": category,
-                  "recommended_action": decision.outcome, "engine_version": fraud.ENGINE_VERSION},
-    )
-
-    if decision.outcome in (fraud.REVIEW, fraud.BLOCK):
-        kind = FraudCase.Kind.REVIEW if decision.outcome == fraud.REVIEW else FraudCase.Kind.INCIDENT
-        case = FraudCase.objects.create(
-            transaction=txn, assessment=assessment, kind=kind,
-            priority=FraudCase.Priority.MEDIUM if kind == FraudCase.Kind.REVIEW else FraudCase.Priority.HIGH,
-        )
-        events.emit(
-            audience=OutboxEvent.Audience.ANALYST, event_type="fraud.alert.created",
-            payload={"case": case.reference, "transaction": txn.reference, "priority": case.priority},
-        )
-    events.emit(
-        audience=OutboxEvent.Audience.CUSTOMER, user_id=txn.sender_wallet.user_id,
-        event_type={fraud.ALLOW: "transaction.completed", fraud.REVIEW: "transaction.under_review",
-                    fraud.BLOCK: "transaction.blocked"}[decision.outcome],
-        payload={"reference": txn.reference, "status": txn.status},
-    )
+Status = Transaction.Status
 
 
 class TransferError(Exception):
@@ -88,14 +58,13 @@ def is_limit_breach(txn: Transaction) -> bool:
 
 
 def _lock_wallets(*wallet_ids) -> dict:
-    # Always lock in primary-key order so two opposite transfers can't deadlock.
+    # Always lock in primary-key order so two opposite transfers can't deadlock
+    # (the diagram shows sender-then-recipient; pk order is the deadlock-safe version of that).
     qs = Wallet.objects.select_for_update().filter(pk__in=set(wallet_ids)).order_by("pk")
     return {w.pk: w for w in qs}
 
 
-def _save_balance(wallet: Wallet) -> None:
-    wallet.save(update_fields=["balance", "updated_at"])
-
+# --- deposits ------------------------------------------------------------------------------------------------
 
 @transaction.atomic
 def deposit(*, wallet: Wallet, amount, description: str = "Deposit") -> Transaction:
@@ -104,68 +73,122 @@ def deposit(*, wallet: Wallet, amount, description: str = "Deposit") -> Transact
     wallet = Wallet.objects.select_for_update().get(pk=wallet.pk)
     if wallet.is_frozen:
         raise TransferError("wallet_frozen", "This wallet is frozen.", 403)
-    wallet.balance += amount
-    _save_balance(wallet)
-    return Transaction.objects.create(
+    txn = Transaction.objects.create(
         type=Transaction.Type.DEPOSIT, receiver_wallet=wallet, amount=amount, currency=wallet.currency,
-        description=description, status=Transaction.Status.COMPLETED,
+        description=description, status=Status.COMPLETED,
+    )
+    ledger.post(wallet, txn, ledger.CREDIT, amount, memo="deposit")
+    return txn
+
+
+# --- transfers (diagram order) -------------------------------------------------------------------------------
+
+def _find_replay(sender, receiver, amount, key):
+    existing = Transaction.objects.filter(sender_wallet=sender, idempotency_key=key).first()
+    if existing and (existing.receiver_wallet_id != receiver.pk or existing.amount != amount):
+        raise TransferError("idempotency_key_reused", "This Idempotency-Key was already used for a different transfer.", 409)
+    return existing
+
+
+def _check_wallets(sender, receiver, amount):
+    if sender.is_frozen:
+        raise TransferError("wallet_frozen", "Your wallet is frozen. Please contact support.", 403)
+    if receiver.is_frozen or receiver.currency != sender.currency:
+        raise TransferError("recipient_unavailable", "This recipient cannot receive funds right now.")
+    if sender.balance < amount:
+        raise TransferError("insufficient_funds", "Insufficient balance.")
+
+
+def _revalidate(sender, receiver, beneficiary, amount):
+    """Run under the wallet lock: the risk decision was made on unlocked data, so re-check what can race."""
+    _check_wallets(sender, receiver, amount)
+    ctx = fraud.FraudContext(sender=sender, receiver=receiver, beneficiary=beneficiary, amount=amount, now=timezone.now())
+    if any(check(ctx) for check in fraud.LIMIT_CHECKS):
+        raise TransferError("limit_exceeded", "This transfer exceeds your transaction limits.", 403)
+
+
+def _new_txn(*, status, sender, receiver, amount, description, key, decision):
+    return Transaction.objects.create(
+        type=Transaction.Type.TRANSFER, sender_wallet=sender, receiver_wallet=receiver, amount=amount,
+        currency=sender.currency, description=description, status=status, idempotency_key=key,
+        fraud_score=decision.score, fraud_flags=decision.flags_as_json(),
     )
 
 
 def transfer(*, user, beneficiary, amount, description: str = "", idempotency_key: str) -> TransferResult:
     amount = Decimal(amount)
-    sender_id = ensure_wallet(user).pk
-    receiver_id = beneficiary.wallet_id
-    if sender_id == receiver_id:
+    sender = ensure_wallet(user)
+    receiver = beneficiary.wallet
+    if sender.pk == receiver.pk:
         raise TransferError("self_transfer", "You cannot transfer to your own wallet.")
 
-    with transaction.atomic():
-        locked = _lock_wallets(sender_id, receiver_id)
-        sender, receiver = locked[sender_id], locked[receiver_id]
+    replay = _find_replay(sender, receiver, amount, idempotency_key)
+    if replay:
+        return TransferResult(replay, replayed=True)
 
-        existing = Transaction.objects.filter(sender_wallet=sender, idempotency_key=idempotency_key).first()
-        if existing:
-            if existing.receiver_wallet_id != receiver_id or existing.amount != amount:
-                raise TransferError(
-                    "idempotency_key_reused", "This Idempotency-Key was already used for a different transfer.", 409
-                )
-            return TransferResult(existing, replayed=True)
+    _check_wallets(sender, receiver, amount)  # steps 8-9
 
-        if sender.is_frozen:
-            raise TransferError("wallet_frozen", "Your wallet is frozen. Please contact support.", 403)
-        if receiver.is_frozen or receiver.currency != sender.currency:
-            raise TransferError("recipient_unavailable", "This recipient cannot receive funds right now.")
-        if sender.balance < amount:
-            raise TransferError("insufficient_funds", "Insufficient balance.")
-
-        decision = fraud.evaluate(
-            fraud.FraudContext(sender=sender, receiver=receiver, beneficiary=beneficiary, amount=amount, now=timezone.now())
-        )
-        txn = Transaction(
-            type=Transaction.Type.TRANSFER, sender_wallet=sender, receiver_wallet=receiver, amount=amount,
-            currency=sender.currency, description=description, idempotency_key=idempotency_key,
-            fraud_score=decision.score, fraud_flags=decision.flags_as_json(),
-        )
+    decision = fraud.evaluate(  # steps 10-13
+        fraud.FraudContext(sender=sender, receiver=receiver, beneficiary=beneficiary, amount=amount, now=timezone.now())
+    )
+    args = dict(sender=sender, receiver=receiver, beneficiary=beneficiary, amount=amount,
+                description=description, key=idempotency_key, decision=decision)
+    try:
         if decision.outcome == fraud.BLOCK:
-            txn.status = Transaction.Status.REJECTED  # nothing moves, but the attempt is audited
+            txn = _record_blocked(**args)
         elif decision.outcome == fraud.REVIEW:
-            sender.balance -= amount  # funds are held until staff decide
-            _save_balance(sender)
-            txn.status = Transaction.Status.PENDING_REVIEW
+            txn = _hold_for_review(**args)
         else:
-            sender.balance -= amount
-            receiver.balance += amount
-            _save_balance(sender)
-            _save_balance(receiver)
-            txn.status = Transaction.Status.COMPLETED
-        txn.save()
-        _record_risk_outcome(txn, decision)
-        return TransferResult(txn)
+            txn = _execute(**args)
+    except IntegrityError:
+        # Lost a race to an identical concurrent request (unique idempotency constraint): replay the winner.
+        replay = _find_replay(sender, receiver, amount, idempotency_key)
+        if replay is None:
+            raise
+        return TransferResult(replay, replayed=True)
+    return TransferResult(txn)
 
+
+def _record_blocked(*, sender, receiver, beneficiary, amount, description, key, decision):
+    """Steps 14-18. Nothing moves; the attempt is stored and the alert is queued after commit."""
+    with transaction.atomic():
+        txn = _new_txn(status=Status.REJECTED, sender=sender, receiver=receiver, amount=amount,
+                       description=description, key=key, decision=decision)
+        recorder.record_transfer_decision(txn=txn, decision=decision)
+        return txn
+
+
+def _hold_for_review(*, sender, receiver, beneficiary, amount, description, key, decision):
+    """Steps 19-23. Funds are held (ledger debit) until an analyst decides."""
+    with transaction.atomic():
+        sender = _lock_wallets(sender.pk)[sender.pk]
+        _revalidate(sender, receiver, beneficiary, amount)
+        txn = _new_txn(status=Status.PENDING_REVIEW, sender=sender, receiver=receiver, amount=amount,
+                       description=description, key=key, decision=decision)
+        ledger.post(sender, txn, ledger.DEBIT, amount, memo="hold")
+        recorder.record_transfer_decision(txn=txn, decision=decision)
+        return txn
+
+
+def _execute(*, sender, receiver, beneficiary, amount, description, key, decision):
+    """Steps 24-39. BEGIN / lock / re-validate / ledger debit + credit / record / audit / COMMIT."""
+    with transaction.atomic():
+        locked = _lock_wallets(sender.pk, receiver.pk)
+        sender, receiver = locked[sender.pk], locked[receiver.pk]
+        _revalidate(sender, receiver, beneficiary, amount)
+        txn = _new_txn(status=Status.COMPLETED, sender=sender, receiver=receiver, amount=amount,
+                       description=description, key=key, decision=decision)
+        ledger.post(sender, txn, ledger.DEBIT, amount, memo="transfer")    # step 27 (+ balance update, 29)
+        ledger.post(receiver, txn, ledger.CREDIT, amount, memo="transfer")  # step 28 (+ balance update, 29)
+        recorder.record_transfer_decision(txn=txn, decision=decision)       # assessment, audit log (31), events queued for after COMMIT
+        return txn
+
+
+# --- manual review -------------------------------------------------------------------------------------------
 
 def _lock_pending(txn_id, reviewer):
     txn = Transaction.objects.select_for_update().get(pk=txn_id)
-    if txn.status != Transaction.Status.PENDING_REVIEW:
+    if txn.status != Status.PENDING_REVIEW:
         raise TransferError("not_pending", "This transfer is not awaiting review.", 409)
     locked = _lock_wallets(txn.sender_wallet_id, txn.receiver_wallet_id)
     sender, receiver = locked[txn.sender_wallet_id], locked[txn.receiver_wallet_id]
@@ -187,14 +210,12 @@ def approve_pending_transfer(txn_id, reviewer) -> Transaction:
     txn, _sender, receiver = _lock_pending(txn_id, reviewer)
     if receiver.is_frozen:
         raise TransferError("recipient_unavailable", "Recipient wallet is frozen; reject instead.")
-    receiver.balance += txn.amount
-    _save_balance(receiver)
-    return _finish_review(txn, reviewer, Transaction.Status.COMPLETED)
+    ledger.post(receiver, txn, ledger.CREDIT, txn.amount, memo="transfer")
+    return _finish_review(txn, reviewer, Status.COMPLETED)
 
 
 @transaction.atomic
 def reject_pending_transfer(txn_id, reviewer) -> Transaction:
     txn, sender, _receiver = _lock_pending(txn_id, reviewer)
-    sender.balance += txn.amount  # release the hold
-    _save_balance(sender)
-    return _finish_review(txn, reviewer, Transaction.Status.REJECTED)
+    ledger.post(sender, txn, ledger.CREDIT, txn.amount, memo="hold_release")
+    return _finish_review(txn, reviewer, Status.REJECTED)

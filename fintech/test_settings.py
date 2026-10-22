@@ -22,3 +22,5 @@ REST_FRAMEWORK = {
     **REST_FRAMEWORK,
     "DEFAULT_THROTTLE_RATES": {"auth": "1000/minute", "transfer": "1000/minute", "beneficiary": "1000/minute"},
 }
+
+CELERY_TASK_ALWAYS_EAGER = True

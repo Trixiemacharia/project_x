@@ -3,7 +3,7 @@ from django.utils import timezone
 
 from apps.wallets import services as wallet_services
 
-from . import events
+from . import events, recorder
 from .models import AuditLog, FraudCase, FraudReview, OutboxEvent
 
 Aud = OutboxEvent.Audience
@@ -50,11 +50,13 @@ def review_case(*, case_id, analyst, decision: str, reason: str) -> FraudCase:
         actor=analyst, actor_role="analyst", action=f"case.{decision}d", case=case, transaction=txn,
         metadata={"from": "open", "to": case.status},
     )
-    events.emit(
-        audience=Aud.CUSTOMER, user_id=txn.sender_wallet.user_id,
-        event_type="transaction.completed" if approve else "transaction.rejected",
-        payload={"reference": txn.reference, "status": txn.status},
-    )
+    if approve:
+        recorder.notify_completed(txn)  # sender balance update + recipient "money received"
+    else:
+        events.emit(
+            audience=Aud.CUSTOMER, user_id=txn.sender_wallet.user_id, event_type="transaction.rejected",
+            payload={"reference": txn.reference, "status": txn.status, "balance": format(txn.sender_wallet.balance, ".2f")},
+        )
     events.emit(
         audience=Aud.ANALYST, event_type="fraud.review.completed",
         payload={"case": case.reference, "transaction": txn.reference, "decision": decision},

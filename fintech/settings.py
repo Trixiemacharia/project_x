@@ -254,3 +254,5 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": 30.0,
     },
 }
+
+CELERYBROKER_URL = REDIS_URL

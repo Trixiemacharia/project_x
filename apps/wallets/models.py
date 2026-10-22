@@ -105,3 +105,5 @@ class Transaction(models.Model):
 
     def __str__(self):
         return f"{self.reference} {self.amount} [{self.status}]"
+
+from .ledger_models import LedgerEntry

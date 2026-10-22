@@ -6,6 +6,7 @@ from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
+from apps.wallets import ledger
 from apps.wallets.models import Transaction, Wallet
 
 from . import daraja, events
@@ -133,9 +134,7 @@ def apply_result(payment_id, *, result_code: int, result_desc: str, receipt=None
                     outcome = "wallet_frozen"
                     logger.error("Wallet frozen at credit time payment_id=%s", payment.id)
                 else:
-                    wallet.balance += payment.amount
-                    wallet.save(update_fields=["balance", "updated_at"])
-                    payment.transaction = Transaction.objects.create(
+                    txn = Transaction.objects.create(
                         type=Transaction.Type.DEPOSIT,
                         receiver_wallet=wallet,
                         amount=payment.amount,
@@ -143,6 +142,8 @@ def apply_result(payment_id, *, result_code: int, result_desc: str, receipt=None
                         description=f"M-Pesa deposit {receipt or ''}".strip()[:140],
                         status=Transaction.Status.COMPLETED,
                     )
+                    ledger.post(wallet, txn, ledger.CREDIT, payment.amount, memo="mpesa_deposit")
+                    payment.transaction = txn
                     payment.status = Status.SUCCESSFUL
         else:
             payment.status = new_status
