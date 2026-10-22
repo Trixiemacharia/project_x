@@ -13,8 +13,8 @@ DEFAULTS = {
     # Amount at which "risky context" rules start to matter.
     "LARGE_AMOUNT": Decimal("20000.00"),
     # Risk score outcomes: < REVIEW allow, REVIEW..BLOCK-1 hold for review, >= BLOCK reject.
-    "REVIEW_THRESHOLD": 40,
-    "BLOCK_THRESHOLD": 80,
+    "REVIEW_THRESHOLD": 30,
+    "BLOCK_THRESHOLD": 70,
     #how fast transactions are happening
     "VELOCITY_WINDOW_MINUTES": 10,
     "VELOCITY_MAX_TRANSFERS": 5,

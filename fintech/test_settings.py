@@ -14,3 +14,11 @@ DATABASES = {
         "NAME": ":memory:",
     },
 }
+
+# Unit tests use in-memory adapters, so local development does not require Redis.
+CACHES = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache", "LOCATION": "test-cache"}}
+CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
+REST_FRAMEWORK = {
+    **REST_FRAMEWORK,
+    "DEFAULT_THROTTLE_RATES": {"auth": "1000/minute", "transfer": "1000/minute", "beneficiary": "1000/minute"},
+}

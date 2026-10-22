@@ -19,6 +19,7 @@ from .conf import wallet_conf as conf
 from .models import Beneficiary, Transaction, Wallet
 
 ALLOW, REVIEW, BLOCK = "allow", "review", "block"
+ENGINE_VERSION = "rules-v1"
 LIMIT_CODES = frozenset({"SINGLE_LIMIT", "DAILY_LIMIT"})
 COUNTED = (Transaction.Status.COMPLETED, Transaction.Status.PENDING_REVIEW)
 

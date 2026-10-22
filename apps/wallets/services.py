@@ -12,6 +12,49 @@ from .conf import wallet_conf as conf
 from .models import Transaction, Wallet
 
 
+def _record_risk_outcome(txn, decision):
+    """Persist the scorer's recommendation separately from the enforced txn state."""
+    from apps.fraud import events
+    from apps.fraud.models import AuditLog, FraudCase, OutboxEvent, RiskAssessment
+
+    category = {
+        fraud.ALLOW: RiskAssessment.Category.LOW,
+        fraud.REVIEW: RiskAssessment.Category.MEDIUM,
+        fraud.BLOCK: RiskAssessment.Category.HIGH,
+    }[decision.outcome]
+    assessment = RiskAssessment.objects.create(
+        transaction=txn,
+        score=decision.score,
+        category=category,
+        recommended_action=decision.outcome,
+        triggered_rules=[flag.code for flag in decision.flags],
+        reasons=decision.flags_as_json(),
+        engine_version=fraud.ENGINE_VERSION,
+    )
+    AuditLog.objects.create(
+        actor=None, actor_role="system", action="risk.assessed", transaction=txn,
+        metadata={"score": decision.score, "category": category,
+                  "recommended_action": decision.outcome, "engine_version": fraud.ENGINE_VERSION},
+    )
+
+    if decision.outcome in (fraud.REVIEW, fraud.BLOCK):
+        kind = FraudCase.Kind.REVIEW if decision.outcome == fraud.REVIEW else FraudCase.Kind.INCIDENT
+        case = FraudCase.objects.create(
+            transaction=txn, assessment=assessment, kind=kind,
+            priority=FraudCase.Priority.MEDIUM if kind == FraudCase.Kind.REVIEW else FraudCase.Priority.HIGH,
+        )
+        events.emit(
+            audience=OutboxEvent.Audience.ANALYST, event_type="fraud.alert.created",
+            payload={"case": case.reference, "transaction": txn.reference, "priority": case.priority},
+        )
+    events.emit(
+        audience=OutboxEvent.Audience.CUSTOMER, user_id=txn.sender_wallet.user_id,
+        event_type={fraud.ALLOW: "transaction.completed", fraud.REVIEW: "transaction.under_review",
+                    fraud.BLOCK: "transaction.blocked"}[decision.outcome],
+        payload={"reference": txn.reference, "status": txn.status},
+    )
+
+
 class TransferError(Exception):
     def __init__(self, code: str, detail: str, status_code: int = 400):
         super().__init__(detail)
@@ -116,6 +159,7 @@ def transfer(*, user, beneficiary, amount, description: str = "", idempotency_ke
             _save_balance(receiver)
             txn.status = Transaction.Status.COMPLETED
         txn.save()
+        _record_risk_outcome(txn, decision)
         return TransferResult(txn)
 
 

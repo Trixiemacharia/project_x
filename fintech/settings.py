@@ -24,17 +24,18 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = config('SECRET_KEY',default='django-key')
+SECRET_KEY = config('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = str(config('DEBUG', default='false')).strip().lower() in {'1', 'true', 'yes', 'on'}
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [host.strip() for host in config('ALLOWED_HOSTS', default='localhost,127.0.0.1').split(',') if host.strip()]
 
 
 # Application definition
 
 INSTALLED_APPS = [
+    'daphne',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -55,7 +56,6 @@ INSTALLED_APPS = [
     'allauth.account',
     'allauth.socialaccount',
     'allauth.socialaccount.providers.google',
-    'daphne',
     'channels',
 ]
 
@@ -81,8 +81,11 @@ REST_FRAMEWORK = {
 # development and the test suite usable without adding unrelated env vars.
 REFRESH_COOKIE_NAME = 'refresh_token'
 REFRESH_COOKIE_PATH = '/api/v1/auth/'
-REFRESH_COOKIE_SECURE = config('REFRESH_COOKIE_SECURE', default=False, cast=bool)
+REFRESH_COOKIE_SECURE = config('REFRESH_COOKIE_SECURE', default=not DEBUG, cast=bool)
 REFRESH_COOKIE_SAMESITE = 'Lax'
+CSRF_COOKIE_SECURE = config('CSRF_COOKIE_SECURE', default=not DEBUG, cast=bool)
+SESSION_COOKIE_SECURE = config('SESSION_COOKIE_SECURE', default=not DEBUG, cast=bool)
+SECURE_SSL_REDIRECT = config('SECURE_SSL_REDIRECT', default=False, cast=bool)
 REDIS_URL = config('REDIS_URL', default='redis://127.0.0.1:6379/0')
 ASGI_APPLICATION = "fintech.asgi.application"
 CACHES = {"default": {"BACKEND": "django.core.cache.backends.redis.RedisCache", "LOCATION": REDIS_URL}}
