@@ -77,7 +77,7 @@ def initiate_stk_push(*, user, amount: Decimal, phone: str, idempotency_key: str
 
     callback_url = (
         f"{settings.MPESA_CALLBACK_BASE_URL.rstrip('/')}"
-        f"/api/v1/payments/mpesa/callback/{settings.MPESA_CALLBACK_SECRET}/"
+        f"/api/v1/payments/hooks/daraja/{settings.MPESA_CALLBACK_SECRET}/"
     )
     try:
         data = daraja.stk_push(
