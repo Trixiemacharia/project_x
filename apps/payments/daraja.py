@@ -1,5 +1,6 @@
 import base64
 import logging
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -119,3 +120,15 @@ def stk_query(checkout_request_id: str) -> dict:
         "CheckoutRequestID": checkout_request_id,
     }
     return _post("/mpesa/stkpushquery/v1/query", payload)
+
+def stk_query_with_retry(checkout_request_id, attempts=4):
+    delay = 5
+    for i in range(attempts):
+        try:
+            return stk_query(checkout_request_id)
+        except DarajaRejected as e:
+            if "429" in str(e) and i < attempts -1:
+                time.sleep(delay)
+                delay *= 2
+                continue
+            raise

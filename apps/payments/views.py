@@ -90,7 +90,6 @@ def _client_ip(request):
 
 class MpesaCallbackView(APIView):
     """
-    POST /api/v1/payments/mpesa/callback/<secret>/
     Called by Safaricom. Unauthenticated by design: protected by the secret in the URL,
     an optional source-IP allowlist, and strict matching inside services.handle_callback.
     """
